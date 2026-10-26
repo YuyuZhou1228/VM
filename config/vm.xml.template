@@ -5,7 +5,7 @@
   The SMBIOS/<sysinfo> identity block is intentionally left as editable literals
   so you can tune it to resemble a real OEM machine — see docs/FIDELITY.md.
 -->
-<domain type='kvm'>
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>${VM_NAME}</name>
   <uuid>${VM_UUID}</uuid>
 
@@ -87,15 +87,15 @@
   <sysinfo type='smbios'>
     <bios>
       <entry name='vendor'>American Megatrends Inc.</entry>
-      <entry name='version'>1.90</entry>
-      <entry name='date'>09/14/2023</entry>
-      <entry name='release'>1.90</entry>
+      <entry name='version'>2423</entry>
+      <entry name='date'>08/18/2023</entry>
+      <entry name='release'>5.27</entry>
     </bios>
     <system>
       <entry name='manufacturer'>ASUS</entry>
       <entry name='product'>System Product Name</entry>
       <entry name='version'>1.0</entry>
-      <entry name='serial'>SN-${VM_NAME}-0001</entry>
+      <entry name='serial'>${SYS_SERIAL}</entry>
       <entry name='uuid'>${VM_UUID}</entry>
       <entry name='sku'>SKU0001</entry>
       <entry name='family'>ASUS MB</entry>
@@ -104,14 +104,14 @@
       <entry name='manufacturer'>ASUSTeK COMPUTER INC.</entry>
       <entry name='product'>PRIME B660-PLUS D4</entry>
       <entry name='version'>Rev 1.xx</entry>
-      <entry name='serial'>MB-${VM_NAME}-0001</entry>
+      <entry name='serial'>${BOARD_SERIAL}</entry>
       <entry name='asset'>Default string</entry>
       <entry name='location'>Default string</entry>
     </baseboard>
     <chassis>
       <entry name='manufacturer'>Default string</entry>
       <entry name='version'>Default string</entry>
-      <entry name='serial'>CH-${VM_NAME}-0001</entry>
+      <entry name='serial'>${CHASSIS_SERIAL}</entry>
       <entry name='asset'>Default string</entry>
       <entry name='sku'>Default string</entry>
     </chassis>
@@ -124,12 +124,18 @@
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
 
     <!-- Primary disk as a SATA drive: reads like a real SSD/HDD and Windows
-         has in-box drivers, so no virtio needed during install. -->
+         has in-box drivers, so no virtio needed during install.
+         The drive's *model* string still defaults to "QEMU HARDDISK" (an
+         obvious tell in `wmic diskdrive get model`); libvirt can't set it, so
+         the <qemu:override> at the bottom of this file rewrites it via the
+         ide-hd `model`/`ver` properties. The user alias `ua-disk-primary` is
+         what that override targets. -->
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
       <source file='${DISK_PATH}'/>
       <target dev='sda' bus='sata'/>
-      <serial>S4EWNX0${VM_NAME}</serial>
+      <serial>${DISK_SERIAL}</serial>
+      <alias name='ua-disk-primary'/>
       <address type='drive' controller='0' bus='0' target='0' unit='0'/>
     </disk>
 
@@ -186,24 +192,76 @@
       <image compression='off'/>
     </graphics>
 
-    <input type='tablet' bus='usb'/>
+    <!-- No USB tablet: it enumerates as "QEMU USB Tablet" (idVendor 0x0627),
+         a clear tell in Device Manager. PS/2 keyboard + mouse read as the
+         ordinary built-in input of a real desktop. (Trade-off: without the
+         tablet, SPICE absolute-pointer sync is lost and the console pointer
+         can feel laggy/relative — fine for a real workload, mildly annoying
+         for console-only use. Re-add the tablet if that bothers you.) -->
     <input type='keyboard' bus='ps2'/>
     <input type='mouse' bus='ps2'/>
+
+    <!-- Intel High Definition Audio (ich9-intel-hda): a real desktop has an
+         audio controller. Its absence is a small but real "this box is bare"
+         signal, and Windows has an in-box HDA driver so it needs no extra
+         install. -->
+    <sound model='ich9'/>
 
     <!-- TPM 2.0 (swtpm) — required by Windows 11. -->
     <tpm model='tpm-crb'>
       <backend type='emulator' version='2.0'/>
     </tpm>
 
-    <rng model='virtio'>
-      <backend model='random'>/dev/urandom</backend>
-    </rng>
+    <!-- No virtio-rng: it enumerates as a Red Hat VirtIO RNG (PCI vendor
+         1AF4) — a paravirtual tell, and without the driver it shows as an
+         unknown PCI device with a warning icon. Real machines don't have one. -->
 
     <!-- No memballoon: the balloon is a virtual-only device and buys little here. -->
     <memballoon model='none'/>
 
-    <channel type='spicevmc'>
-      <target type='virtio' name='com.redhat.spice.0'/>
-    </channel>
+    <!-- No spicevmc channel: com.redhat.spice.0 is a virtio-serial port
+         (Red Hat vendor) for the SPICE guest agent, which isn't installed
+         anyway. Dropping it removes one more paravirtual device. SPICE display
+         still works for the console. -->
   </devices>
+
+  <!-- ======================================================================
+       QEMU-level overrides for tells libvirt can't express natively.
+       Requires the qemu:// namespace (declared on <domain> above).
+
+       1. <qemu:commandline> appends raw QEMU args AFTER the ones libvirt
+          generates, so they win on any option that is "last one wins":
+            * -machine x-oem-id / x-oem-table-id — rewrites the ACPI table OEM
+              fields, which otherwise default to "BOCHS "/"BXPC" (a textbook
+              VM signature, e.g. HKLM\HARDWARE\ACPI\DSDT\BOCHS_). Max 6 and 8
+              chars respectively. Multiple -machine args merge in QEMU.
+            * -smbios type=0,uefi=on,vm=off — clears the SMBIOS "system is a
+              virtual machine" BIOS-characteristics bit (dmidecode: "System is
+              a virtual machine"), which QEMU sets by default. It MUST repeat
+              uefi=on, because QEMU re-reads both flags on every type=0 entry
+              and this (last) entry would otherwise reset uefi to off. The
+              vendor/version/date set by libvirt's earlier -smbios are kept
+              (QEMU only overwrites fields that are present).
+
+       2. <qemu:override> injects frontend device properties into libvirt's
+          own -device line (needs libvirt >= 8.2, i.e. Ubuntu 24.04+; on older
+          libvirt this block is ignored/ rejected — drop it there and accept
+          the default disk model). It sets the ide-hd `model`/`ver` so the
+          disk reports as a real SSD instead of "QEMU HARDDISK".
+       =================================================================== -->
+  <qemu:commandline>
+    <qemu:arg value='-machine'/>
+    <qemu:arg value='x-oem-id=ALASKA,x-oem-table-id=A M I'/>
+    <qemu:arg value='-smbios'/>
+    <qemu:arg value='type=0,uefi=on,vm=off'/>
+  </qemu:commandline>
+
+  <qemu:override>
+    <qemu:device alias='ua-disk-primary'>
+      <qemu:frontend>
+        <qemu:property name='model' type='string' value='Samsung SSD 870 EVO 500GB'/>
+        <qemu:property name='ver' type='string' value='SVQ01B6Q'/>
+      </qemu:frontend>
+    </qemu:device>
+  </qemu:override>
 </domain>

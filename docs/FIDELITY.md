@@ -20,6 +20,19 @@ desktop board; edit them to match a machine you actually own for the best
 result. Keep the pieces internally consistent — a board model that really
 belongs to the vendor you named, a BIOS version that vendor really shipped.
 
+The system/baseboard/chassis **serials and the disk serial are generated once**
+by `scripts/02-build-vm.sh` (`rand_serial`, uppercase alphanumeric) and persisted
+to `config/vm.env`, so they stay stable across rebuilds/ports but aren't the same
+for everyone who clones the repo — a hard-coded serial that embeds the VM name is
+itself a fingerprint.
+
+QEMU also sets a BIOS flag that says **"system is a virtual machine"** (an SMBIOS
+type-0 characteristic byte; `dmidecode` prints it, and Windows can read it via
+`GetSystemFirmwareTable`). libvirt has no knob for it, so the `<qemu:commandline>`
+block appends `-smbios type=0,uefi=on,vm=off` to clear it. It repeats `uefi=on`
+on purpose: QEMU re-reads that flag on every type-0 entry, so the last entry must
+restate it or Secure Boot's UEFI bit would flip off.
+
 > Tip: on a real Linux box run `sudo dmidecode` to see exactly which fields a
 > physical machine fills in, and mirror that shape.
 
@@ -54,6 +67,15 @@ during install), and a SATA disk reads like a real drive. We also set a plausibl
 the fidelity-first choice. (NVMe emulation is another realistic option if you
 want to experiment — it lets you set a model string too.)
 
+The one thing libvirt *can't* set on a SATA disk is the drive **model string**,
+which otherwise defaults to `QEMU HARDDISK` — a dead giveaway in `wmic diskdrive
+get model` and the registry. The `<qemu:override>` block at the bottom of the
+template rewrites it via the `ide-hd` `model`/`ver` properties (default:
+`Samsung SSD 870 EVO 500GB`). **`<qemu:override>` needs libvirt ≥ 8.2**
+(Ubuntu 24.04+); on older libvirt (e.g. 22.04's 8.0) that block is rejected —
+remove it and live with the default model, or switch to NVMe emulation, which
+exposes a model string through libvirt directly.
+
 ## 4. Network
 
 **What a real machine shows:** a real NIC (Intel/Realtek/etc.) with a MAC whose
@@ -73,12 +95,39 @@ giveaway QEMU range (`52:54:00`). The MAC is persisted so it stays stable.
 - **Timers/clock**: `localtime` RTC (what Windows expects) and the Hyper-V clock
   for efficient timekeeping.
 
-## 6. Virtual-only devices we remove
+## 6. Virtual-only devices we remove (and one we add)
 
-- **No memory balloon** (`<memballoon model='none'/>`) — the balloon is a
-  paravirtual-only device and buys little here.
-- No VMware/VirtualBox-style guest-tools channels; the only guest integration is
-  the optional QEMU guest agent, which you can also leave out.
+Each paravirtual device is a Red Hat / VirtIO PCI vendor ID (1AF4) or a QEMU
+device string that a check can read straight out of Device Manager, so the base
+build omits them:
+
+- **No memory balloon** (`<memballoon model='none'/>`) — paravirtual-only.
+- **No virtio-rng** — a VirtIO RNG (vendor 1AF4); without the driver it shows as
+  an unknown PCI device with a warning icon. Real machines don't have one.
+- **No SPICE agent channel** (`com.redhat.spice.0`) — a virtio-serial port for a
+  guest agent that isn't installed anyway. SPICE *display* still works.
+- **No USB tablet** — it enumerates as `QEMU USB Tablet` (idVendor 0x0627). We
+  keep a PS/2 keyboard + mouse, which read as ordinary built-in input.
+  *Trade-off:* without the tablet the SPICE console loses absolute-pointer sync,
+  so the console pointer can feel laggy — re-add `<input type='tablet'>` if you
+  work from the console a lot.
+- **No QEMU guest agent** (see `unattended/guest/FirstLogon.ps1`) — installing it
+  leaves a service, Program Files entries and a VSS provider, all QEMU software
+  traces, for zero benefit when no agent channel is defined.
+
+Conversely, we **add Intel HD Audio** (`<sound model='ich9'/>`): a real desktop
+has an audio controller, Windows drives it in-box, and its absence is a small
+"this box is bare" signal.
+
+### ACPI table OEM fields
+
+QEMU stamps its ACPI tables with OEM id `BOCHS` / table id `BXPC` — a textbook VM
+signature that detectors read from `HKLM\HARDWARE\ACPI\DSDT\BOCHS_` and friends.
+The `<qemu:commandline>` block passes `-machine x-oem-id=…,x-oem-table-id=…` to
+override them (merged into libvirt's own `-machine`). Note this does **not** touch
+the `WAET` ACPI table or the `QEMU0002` fw-cfg device, which QEMU always emits and
+which a thorough check can still see — removing those needs a patched QEMU and is
+out of scope here.
 
 ## 7. The display — the one honest gap
 

@@ -29,3 +29,12 @@ persist_env() {
   local key="$1" value="$2"
   printf '%s="%s"\n' "${key}" "${value}" >> "${REPO_ROOT}/config/vm.env"
 }
+
+# Emit a random uppercase-alphanumeric serial of N chars (default 12). Real
+# board/drive serials look like this; it avoids the giveaway of a serial that
+# embeds the VM name or is identical for everyone who clones the repo. Reads a
+# generous chunk of /dev/urandom so the A-Z0-9 filter still yields enough chars.
+rand_serial() {
+  local n="${1:-12}"
+  head -c 256 /dev/urandom | LC_ALL=C tr -dc 'A-Z0-9' | cut -c1-"${n}"
+}

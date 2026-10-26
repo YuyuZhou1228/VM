@@ -14,13 +14,12 @@ $exp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 Set-ItemProperty -Path $exp -Name HideFileExt -Value 0
 Set-ItemProperty -Path $exp -Name Hidden      -Value 1
 
-# Install the QEMU guest agent from the virtio-win CD if it's attached.
-foreach ($d in 'D','E','F','G','H','I','J') {
-  $msi = "${d}:\guest-agent\qemu-ga-x86_64.msi"
-  if (Test-Path $msi) {
-    Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait
-    break
-  }
-}
+# NOTE: we deliberately do NOT install the QEMU guest agent here. It installs a
+# "QEMU Guest Agent" service plus files under Program Files and a VSS provider —
+# all obvious "this is a QEMU VM" software traces — and this build defines no
+# guest-agent channel for it to talk over anyway, so it would be pure exposure
+# with no benefit. If you ever need host<->guest integration, add the matching
+# <channel> device to the domain and re-enable an install here, understanding
+# the fidelity cost.
 
 # Add your own provisioning below (app installs, registry tweaks, etc.).
