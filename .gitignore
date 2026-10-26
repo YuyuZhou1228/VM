@@ -1,0 +1,25 @@
+# Local, machine-specific config (paths, generated MAC/UUID, Windows password)
+config/vm.env
+
+# Large / licensed media and disk images — never commit
+*.iso
+*.qcow2
+*.img
+*.raw
+
+# Firmware / UEFI nvram blobs
+*.fd
+*_VARS.fd
+
+# Port bundles and build scratch
+*.tar
+*.tar.*
+**/answer/
+*.runtime.xml
+*.local.xml
+*.exported.xml
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp

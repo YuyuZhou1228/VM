@@ -1,0 +1,209 @@
+<!--
+  libvirt domain template for a bare-metal-fidelity Windows 11 guest.
+
+  Placeholders like ${VM_NAME} are filled in by scripts/02-build-vm.sh (envsubst).
+  The SMBIOS/<sysinfo> identity block is intentionally left as editable literals
+  so you can tune it to resemble a real OEM machine — see docs/FIDELITY.md.
+-->
+<domain type='kvm'>
+  <name>${VM_NAME}</name>
+  <uuid>${VM_UUID}</uuid>
+
+  <metadata>
+    <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
+      <libosinfo:os id="http://microsoft.com/win/11"/>
+    </libosinfo:libosinfo>
+  </metadata>
+
+  <memory unit='MiB'>${MEM_MIB}</memory>
+  <currentMemory unit='MiB'>${MEM_MIB}</currentMemory>
+  <vcpu placement='static'>${VCPUS}</vcpu>
+
+  <os firmware='efi'>
+    <type arch='x86_64' machine='${MACHINE_TYPE}'>hvm</type>
+    <loader secure='yes'/>
+    <nvram/>
+    <!-- Boot from CD first so the installer runs on a blank disk; eject the
+         ISOs after install (scripts/03-detach-install-media.sh) to boot the OS. -->
+    <boot dev='cdrom'/>
+    <boot dev='hd'/>
+    <bootmenu enable='yes' timeout='3000'/>
+    <!-- Populate SMBIOS tables from the <sysinfo> block below. -->
+    <smbios mode='sysinfo'/>
+  </os>
+
+  <features>
+    <acpi/>
+    <apic/>
+    <!-- Hyper-V enlightenments: let Windows schedule, time, and idle
+         efficiently under KVM. Big performance/stability win. See FIDELITY.md
+         for the trade-off (these advertise a Hyper-V interface to the guest). -->
+    <hyperv mode='custom'>
+      <relaxed state='on'/>
+      <vapic state='on'/>
+      <spinlocks state='on' retries='8191'/>
+      <vpindex state='on'/>
+      <runtime state='on'/>
+      <synic state='on'/>
+      <stimer state='on'><direct state='on'/></stimer>
+      <reset state='on'/>
+      <frequencies state='on'/>
+      <tlbflush state='on'/>
+      <ipi state='on'/>
+      <vendor_id state='on' value='GenuineIntel'/>
+    </hyperv>
+    <!-- Hide the KVM paravirtual CPUID leaf. Standard setting so that real
+         GPU drivers behave normally once you move to GPU passthrough. -->
+    <kvm>
+      <hidden state='on'/>
+    </kvm>
+    <vmport state='off'/>
+    <smm state='on'/>
+  </features>
+
+  ${CPU_DEF}
+
+  <clock offset='localtime'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+    <timer name='hypervclock' present='yes'/>
+  </clock>
+
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+
+  <!-- ======================================================================
+       SMBIOS / DMI identity — what `systeminfo`, `wmic baseboard`, and Device
+       Manager report. Edit to match a real OEM system for best fidelity; keep
+       the vendor + product line internally consistent. See docs/FIDELITY.md.
+       =================================================================== -->
+  <sysinfo type='smbios'>
+    <bios>
+      <entry name='vendor'>American Megatrends Inc.</entry>
+      <entry name='version'>1.90</entry>
+      <entry name='date'>09/14/2023</entry>
+      <entry name='release'>1.90</entry>
+    </bios>
+    <system>
+      <entry name='manufacturer'>ASUS</entry>
+      <entry name='product'>System Product Name</entry>
+      <entry name='version'>1.0</entry>
+      <entry name='serial'>SN-${VM_NAME}-0001</entry>
+      <entry name='uuid'>${VM_UUID}</entry>
+      <entry name='sku'>SKU0001</entry>
+      <entry name='family'>ASUS MB</entry>
+    </system>
+    <baseboard>
+      <entry name='manufacturer'>ASUSTeK COMPUTER INC.</entry>
+      <entry name='product'>PRIME B660-PLUS D4</entry>
+      <entry name='version'>Rev 1.xx</entry>
+      <entry name='serial'>MB-${VM_NAME}-0001</entry>
+      <entry name='asset'>Default string</entry>
+      <entry name='location'>Default string</entry>
+    </baseboard>
+    <chassis>
+      <entry name='manufacturer'>Default string</entry>
+      <entry name='version'>Default string</entry>
+      <entry name='serial'>CH-${VM_NAME}-0001</entry>
+      <entry name='asset'>Default string</entry>
+      <entry name='sku'>Default string</entry>
+    </chassis>
+    <oemStrings>
+      <entry>Default string</entry>
+    </oemStrings>
+  </sysinfo>
+
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+
+    <!-- Primary disk as a SATA drive: reads like a real SSD/HDD and Windows
+         has in-box drivers, so no virtio needed during install. -->
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
+      <source file='${DISK_PATH}'/>
+      <target dev='sda' bus='sata'/>
+      <serial>S4EWNX0${VM_NAME}</serial>
+      <address type='drive' controller='0' bus='0' target='0' unit='0'/>
+    </disk>
+
+    <!-- Windows install ISO (eject after install). -->
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='${INSTALL_ISO}'/>
+      <target dev='sdb' bus='sata'/>
+      <readonly/>
+      <address type='drive' controller='0' bus='0' target='0' unit='1'/>
+    </disk>
+
+    <!-- Unattended answer ISO: autounattend.xml lives at its root. -->
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='${ANSWER_ISO}'/>
+      <target dev='sdc' bus='sata'/>
+      <readonly/>
+      <address type='drive' controller='0' bus='0' target='0' unit='2'/>
+    </disk>
+
+    <!-- virtio-win ISO: QEMU guest agent + optional paravirtual drivers. -->
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='${VIRTIO_ISO}'/>
+      <target dev='sdd' bus='sata'/>
+      <readonly/>
+      <address type='drive' controller='0' bus='0' target='0' unit='3'/>
+    </disk>
+
+    <controller type='sata' index='0'/>
+    <controller type='usb' model='qemu-xhci' ports='15'/>
+    <controller type='pci' model='pcie-root'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+
+    <!-- Intel Gigabit NIC (e1000e): in-box Windows driver, reads as real
+         hardware. MAC uses a real-vendor OUI (set in scripts/lib.sh). -->
+    <interface type='network'>
+      <source network='default'/>
+      <mac address='${MAC_ADDR}'/>
+      <model type='e1000e'/>
+    </interface>
+
+    <!-- Emulated display for install/dev. Swap for GPU passthrough later for
+         the most bare-metal feel (hardware-specific, not portable). -->
+    <video>
+      <model type='vga' vram='65536' heads='1'/>
+    </video>
+    <graphics type='spice' autoport='yes'>
+      <listen type='address'/>
+      <image compression='off'/>
+    </graphics>
+
+    <input type='tablet' bus='usb'/>
+    <input type='keyboard' bus='ps2'/>
+    <input type='mouse' bus='ps2'/>
+
+    <!-- TPM 2.0 (swtpm) — required by Windows 11. -->
+    <tpm model='tpm-crb'>
+      <backend type='emulator' version='2.0'/>
+    </tpm>
+
+    <rng model='virtio'>
+      <backend model='random'>/dev/urandom</backend>
+    </rng>
+
+    <!-- No memballoon: the balloon is a virtual-only device and buys little here. -->
+    <memballoon model='none'/>
+
+    <channel type='spicevmc'>
+      <target type='virtio' name='com.redhat.spice.0'/>
+    </channel>
+  </devices>
+</domain>
