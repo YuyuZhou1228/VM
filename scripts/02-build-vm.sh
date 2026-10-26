@@ -26,6 +26,31 @@ if [[ -z "${VM_UUID:-}" ]]; then
   log "Generated stable system UUID ${VM_UUID} (saved to config/vm.env)"
 fi
 
+# Persist stable, realistic-looking serials for the SMBIOS identity and the
+# disk. Generated once and reused so rebuilds/ports keep one identity, and so
+# every clone of the repo doesn't ship the same serials (a fingerprint in
+# itself). See scripts/lib.sh:rand_serial and docs/FIDELITY.md.
+if [[ -z "${SYS_SERIAL:-}" ]]; then
+  SYS_SERIAL="$(rand_serial 14)"
+  persist_env SYS_SERIAL "${SYS_SERIAL}"
+  log "Generated system serial ${SYS_SERIAL} (saved to config/vm.env)"
+fi
+if [[ -z "${BOARD_SERIAL:-}" ]]; then
+  BOARD_SERIAL="$(rand_serial 15)"
+  persist_env BOARD_SERIAL "${BOARD_SERIAL}"
+  log "Generated baseboard serial ${BOARD_SERIAL} (saved to config/vm.env)"
+fi
+if [[ -z "${CHASSIS_SERIAL:-}" ]]; then
+  CHASSIS_SERIAL="$(rand_serial 14)"
+  persist_env CHASSIS_SERIAL "${CHASSIS_SERIAL}"
+  log "Generated chassis serial ${CHASSIS_SERIAL} (saved to config/vm.env)"
+fi
+if [[ -z "${DISK_SERIAL:-}" ]]; then
+  DISK_SERIAL="S$(rand_serial 15)"   # S-prefixed, Samsung-SSD style
+  persist_env DISK_SERIAL "${DISK_SERIAL}"
+  log "Generated disk serial ${DISK_SERIAL} (saved to config/vm.env)"
+fi
+
 # --- disk -------------------------------------------------------------------
 DISK_PATH="${VM_DIR}/${VM_NAME}.qcow2"
 if [[ -f "${DISK_PATH}" ]]; then
@@ -67,7 +92,8 @@ MEM_MIB=$(( RAM_GB * 1024 ))
 VCPUS=$(( CPU_SOCKETS * CPU_CORES * CPU_THREADS ))
 DOMAIN_XML="${VM_DIR}/${VM_NAME}.xml"
 export VM_NAME VM_UUID MEM_MIB VCPUS MACHINE_TYPE CPU_DEF DISK_PATH INSTALL_ISO VIRTIO_ISO ANSWER_ISO MAC_ADDR
-envsubst '${VM_NAME} ${VM_UUID} ${MEM_MIB} ${VCPUS} ${MACHINE_TYPE} ${CPU_DEF} ${DISK_PATH} ${INSTALL_ISO} ${VIRTIO_ISO} ${ANSWER_ISO} ${MAC_ADDR}' \
+export SYS_SERIAL BOARD_SERIAL CHASSIS_SERIAL DISK_SERIAL
+envsubst '${VM_NAME} ${VM_UUID} ${MEM_MIB} ${VCPUS} ${MACHINE_TYPE} ${CPU_DEF} ${DISK_PATH} ${INSTALL_ISO} ${VIRTIO_ISO} ${ANSWER_ISO} ${MAC_ADDR} ${SYS_SERIAL} ${BOARD_SERIAL} ${CHASSIS_SERIAL} ${DISK_SERIAL}' \
   < "${REPO_ROOT}/config/vm.xml.template" > "${DOMAIN_XML}"
 log "Wrote domain XML: ${DOMAIN_XML}"
 
